@@ -3,7 +3,7 @@ A new feature in Windows Server 2016 (and available in earlier version by instal
 ```
 Network access: Restrict clients allowed to make remote calls to SAM
 ```
-These functions checks all DCs for the current state of this policy and allows deleting the key from the registry of all DCs in the domain if needed.
+These functions check all DCs for the current state of this policy and allows deleting the key from the registry of all DCs in the domain if needed.
 
 You may read about this feature on MS Docs [here](https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/network-access-restrict-clients-allowed-to-make-remote-sam-calls).
 
