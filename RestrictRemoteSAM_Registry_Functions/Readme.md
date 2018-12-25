@@ -1,4 +1,4 @@
-#Restrict Remote SAM Registry Functions
+# Restrict Remote SAM Registry Functions
 A new feature in Windows Server 2016 (and available in earlier version by installing an update) adds the policy: 
 ```
 Network access: Restrict clients allowed to make remote calls to SAM
