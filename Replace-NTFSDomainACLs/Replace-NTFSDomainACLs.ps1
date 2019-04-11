@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-This script replaces existing ACLs from a specific domains with entries from a new domain.
+This script replaces existing ACLs from a specific domain with entries from a new domain.
 
 .DESCRIPTION
 Typical use scenario: You are migrating from an old forest to a new one. Your file shares already have permissions that point
