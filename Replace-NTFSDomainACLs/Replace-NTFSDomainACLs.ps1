@@ -12,17 +12,20 @@ The script requires cmdlets from the ActiveDirectory module.
 For best performance, use local paths instead of network locations. However network URLs are supported.
 
 .EXAMPLE
-.\Replace-NTFSDomainACLs.ps1 -OldDomainName "OldDomain" -NewDomainName "NewDomain" -RootPath D:\FileShares\ExampleShare
+.\Replace-NTFSDomainACLs.ps1 -OldDomainName "OldDomain" -NewDomainName "NewDomain" -RootPath D:\FileShares\ExampleShare | Out-GridView
 
 This will check the security permissions on each file under the root path, for each file where permissions are not inherited and
 the Access Rule belong to objects in OldDomain, the script will try to find a match with the same username in NewDomain. If a 
 match is found, the script will add a new rule idenitical to the old one, and remove the OldDomain entry.
+
+The results will be displayed in a Grid View.
 
 .EXAMPLE
 .\Replace-NTFSDomainACLs.ps1 -OldDomainName "OldDomain" -NewDomainName "NewDomain" -RootPath D:\FileShares\ExampleShare -CSVLogPath C:\temp\example.csv
 
 Same as the first example, additionally this will save the results in CSV file.
 .LINK
+https://github.com/WillyMoselhy/ActiveDirectory-PowerShell-Scripts/tree/master/Replace-NTFSDomainACLs
 
 #>
 
