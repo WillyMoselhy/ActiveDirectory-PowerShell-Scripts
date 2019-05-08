@@ -58,7 +58,7 @@ The Get-ACL and Set-ACL commands do not function if the file name is longer than
 
 The script will show an error for paths longer than 255 characters. You can review the list by filtering the output and run the script again using one of the below workarounds,
 ### Script is running on Windows 10 or Windows Server 2016
-Beginnig with Windows version 1607 it is possible to use the \\\\?\ prefix to handle file names longer than 255 characters.
+Beginnig with Windows version 1607 it is possible to use the ```\\?\``` prefix to handle file names longer than 255 characters.
 * If you are targetting a local file use this format: ``` \\\\?\C:\Temp\Folder ```
 * If you are targetting a file share, use this format: ``` \\\\?\UNC\FileServer\FileShare\Folder ```
 
