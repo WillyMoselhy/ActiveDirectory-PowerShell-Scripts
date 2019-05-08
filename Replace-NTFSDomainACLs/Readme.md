@@ -62,6 +62,8 @@ Beginnig with Windows version 1607 it is possible to use the \\?\ prefix to hand
 . If you are targetting a local file use this format: \\?\C:\Temp\Folder
 . If you are targetting a file share, use this format: \\?\UNC\FileServer\FileShare\Folder
 
+More info on this can be found here: [Maximum Path Length Limitation](https://docs.microsoft.com/en-us/windows/desktop/FileIO/naming-a-file#maximum-path-length-limitation)
+
 ### Script is running on older versions of Windows
 
 Use mapped drives to shorten the path.
