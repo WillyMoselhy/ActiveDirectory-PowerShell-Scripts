@@ -55,7 +55,12 @@ Param(
     # List of exception objects in old domain to skip. 
     # This will not replace accounts for defined values.
     # specify as pre Windows 2000 format "OldDomain\Name"
-    [string[]] $Exceptions,
+    [string[]] $ExceptionList,
+
+    # List of object (users or groups) to replace
+    # This will only replace the accounts for defined values
+    # specify as per Windows 2000 format "OldDomain\Name"
+    [string[]] $IncludeList,
 
     # Path to export results as CSV
     [Parameter(Mandatory = $false)]
@@ -96,7 +101,18 @@ For more info check this link: https://docs.microsoft.com/en-us/windows/desktop/
 "@
         }
         $ACL = $Item | Get-Acl
-        $OldDomainAccessRules = $Acl.Access | Where-Object { $_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false -and $_.IdentityReference.Value -notin $Exceptions}
+        $OldDomainAccessRules = $Acl.Access | Where-Object { $_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false}
+        
+        #Remove accounts that are in the excpetion list
+        if($ExceptionList){
+            $OldDomainAccessRules = $OldDomainAccessRules | Where-Object {$_.IdentityReference.Value -notin $ExceptionList}
+        }
+        
+        # Filter by accounts that are in the include list
+        if($IncludeList){
+            $OldDomainAccessRules = $OldDomainAccessRules | Where-Object {$_.IdentityReference.Value -in $IncludeList}
+        }
+
         if ($OldDomainAccessRules) {
             $ACLUpdates = 0
             foreach ($OldAccessRule in $OldDomainAccessRules) {
