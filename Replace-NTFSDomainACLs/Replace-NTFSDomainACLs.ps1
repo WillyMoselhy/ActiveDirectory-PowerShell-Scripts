@@ -18,6 +18,8 @@ This will check the security permissions on each file under the root path, for e
 the Access Rule belong to objects in OldDomain, the script will try to find a match with the same username in NewDomain. If a 
 match is found, the script will add a new rule idenitical to the old one, and remove the OldDomain entry.
 
+The domain names must be the same as the pre Windows 2000 format, DomainName\Username not Username@domain.com
+
 The results will be displayed in a Grid View.
 
 .EXAMPLE
@@ -40,6 +42,11 @@ Param(
     [Parameter(Mandatory = $true)]
     [string] $NewDomainName,
 
+    # New domain controller FQDN. Specify this if the script is running from old domain.
+    [Parameter(Mandatory = $false)]
+    [ValidateScript( {Test-NetConnection -ComputerName $_ -InformationLevel Quiet})]
+    [string] $NewDCFQDN,
+
     # Path of folder to replace permissions
     [Parameter(Mandatory = $true)]
     [ValidateScript( { Test-Path -Path $_ })]
@@ -59,6 +66,13 @@ $ChildItems = [Array] (Get-ChildItem -Path $RootPath -Recurse )
 if ($ChildItems) { $AllItems = $RootItem + $ChildItems }
 else { $AllItems = $RootItem }
 
+if($NewDCFQDN){
+    #If new DC FQDN is specified, use it when getting the AD Object
+    $PSDefaultParameterValues = @{
+        "Get-ADObject:Server" = $NewDCFQDN
+    }
+}
+
 $Count = 0
 
 $Result = foreach ($Item in $AllItems) {
@@ -75,7 +89,7 @@ $Result = foreach ($Item in $AllItems) {
             $ACLUpdates = 0
             foreach ($OldAccessRule in $OldDomainAccessRules) {
                 $ObjectName = $OldAccessRule.IdentityReference -replace ".+\\(.+)", '$1'
-                $NewDomainADObject = Get-ADObject -Filter { SamAccountName -eq $ObjectName } -Properties CanonicalName
+                $NewDomainADObject = Get-ADObject -Filter { SamAccountName -eq $ObjectName } -Properties CanonicalName 
                 if ($NewDomainADObject) {
                     #User/group found in new forest
                     $ACLUpdates++
