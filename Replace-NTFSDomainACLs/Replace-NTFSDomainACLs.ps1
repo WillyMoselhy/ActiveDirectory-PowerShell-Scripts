@@ -42,15 +42,20 @@ Param(
     [Parameter(Mandatory = $true)]
     [string] $NewDomainName,
 
+    # Path of folder to replace permissions
+    [Parameter(Mandatory = $true)]
+    [ValidateScript( { Test-Path -Path $_ })]
+    [string] $RootPath,
+
     # New domain controller FQDN. Specify this if the script is running from old domain.
     [Parameter(Mandatory = $false)]
     [ValidateScript( {Test-NetConnection -ComputerName $_ -InformationLevel Quiet})]
     [string] $NewDCFQDN,
 
-    # Path of folder to replace permissions
-    [Parameter(Mandatory = $true)]
-    [ValidateScript( { Test-Path -Path $_ })]
-    [string] $RootPath,
+    # List of exception objects in old domain to skip. 
+    # This will not replace accounts for defined values.
+    # specify as pre Windows 2000 format "OldDomain\Name"
+    [string[]] $Exceptions,
 
     # Path to export results as CSV
     [Parameter(Mandatory = $false)]
@@ -83,8 +88,15 @@ $Result = foreach ($Item in $AllItems) {
         -Status   "$Count/$($AllItems.Count) - $($Item.FullName)" `
         -PercentComplete $Progress    
     try {
+        # Handling for long paths
+        if($item.FullName.length -ge 255 -and $item.FullName -notlike "\\?\*"){
+            Write-Error -Exception @"
+The file name is too long. Please use \\?\ or \\?\UNC\ prefix (for Windows 1607+) or use Mapped Drives to shorten the path.
+For more info check this link: https://docs.microsoft.com/en-us/windows/desktop/FileIO/naming-a-file#maximum-path-length-limitation
+"@
+        }
         $ACL = $Item | Get-Acl
-        $OldDomainAccessRules = $Acl.Access | Where-Object { $_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false }
+        $OldDomainAccessRules = $Acl.Access | Where-Object { $_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false -and $_.IdentityReference.Value -notin $Exceptions}
         if ($OldDomainAccessRules) {
             $ACLUpdates = 0
             foreach ($OldAccessRule in $OldDomainAccessRules) {
@@ -165,14 +177,16 @@ $Result = foreach ($Item in $AllItems) {
     }
     catch {
         $ErrorMessage = $Error[0].Exception.Message
-        Type                = "Error"
-        Path                = $Item.FullName
-        OldForestObjectName = ""
-        FoundInNewForest    = ""
-        CanonicalName       = ""
-        ObjectType          = ""
-        ACLUpdated          = ""
-        ErrorMessage        = "$ErrorMessage"        
+        [PSCustomObject]@{
+            Type                = "Error"
+            Path                = $Item.FullName
+            OldForestObjectName = ""
+            FoundInNewForest    = ""
+            CanonicalName       = ""
+            ObjectType          = ""
+            ACLUpdated          = ""
+            ErrorMessage        = "$ErrorMessage"   
+        }
     }
 }
 
