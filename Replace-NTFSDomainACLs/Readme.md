@@ -7,7 +7,7 @@ point to the new domain.
 
 >The script requires cmdlets from the **ActiveDirectory** module.
 
->For best performance, use local paths instead of network locations. However network URLs are supported.
+>For best performance, use local paths instead of network locations. However network file shares are supported.
 
 **Example 1** Display results in GridView (Does not work on Windows Core)
 ```PowerShell
