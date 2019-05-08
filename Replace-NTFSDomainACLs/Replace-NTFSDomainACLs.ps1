@@ -42,7 +42,7 @@ Param(
 
     # Path of folder to replace permissions
     [Parameter(Mandatory = $true)]
-    [ValidateScript({Test-Path -Path $_})]
+    [ValidateScript( { Test-Path -Path $_ })]
     [string] $RootPath,
 
     # Path to export results as CSV
@@ -54,99 +54,116 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
-$RootItem   = [Array] (Get-Item -Path $RootPath)
+$RootItem = [Array] (Get-Item -Path $RootPath)
 $ChildItems = [Array] (Get-ChildItem -Path $RootPath -Recurse )
-if($ChildItems) {$AllItems = $RootItem + $ChildItems}
-else            {$AllItems = $RootItem}
+if ($ChildItems) { $AllItems = $RootItem + $ChildItems }
+else { $AllItems = $RootItem }
 
-$Count    = 0
+$Count = 0
 
-$Result = foreach ($Item in $AllItems){
+$Result = foreach ($Item in $AllItems) {
     #Update Progress bar
-        $Count++
-        $Progress = ($Count/$AllItems.Count)*100
-        Write-Progress -Activity "Replacing security permissions of objects from $OldDomainName with $NewDomainName" `
-                       -Status   "$Count/$($AllItems.Count) - $($Item.FullName)" `
-                       -PercentComplete $Progress
+    $Count++
+    $Progress = ($Count / $AllItems.Count) * 100
+    Write-Progress -Activity "Replacing security permissions of objects from $OldDomainName with $NewDomainName" `
+        -Status   "$Count/$($AllItems.Count) - $($Item.FullName)" `
+        -PercentComplete $Progress    
+    try {
+        $ACL = $Item | Get-Acl
+        $OldDomainAccessRules = $Acl.Access | Where-Object { $_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false }
+        if ($OldDomainAccessRules) {
+            $ACLUpdates = 0
+            foreach ($OldAccessRule in $OldDomainAccessRules) {
+                $ObjectName = $OldAccessRule.IdentityReference -replace ".+\\(.+)", '$1'
+                $NewDomainADObject = Get-ADObject -Filter { SamAccountName -eq $ObjectName } -Properties CanonicalName
+                if ($NewDomainADObject) {
+                    #User/group found in new forest
+                    $ACLUpdates++
+                    # Add new Acess rule for user in new forest
+                    $NewAccessRule = New-Object system.security.AccessControl.FileSystemAccessRule("$NewDomainName\$ObjectName", `
+                            $OldAccessRule.FileSystemRights, `
+                            $OldAccessRule.InheritanceFlags, `
+                            $OldAccessRule.PropagationFlags, `
+                            $OldAccessRule.AccessControlType`
+                    )
+                    $ACL.AddAccessRule($NewAccessRule)
 
-    $ACL = $Item | Get-Acl
-    $OldDomainAccessRules = $Acl.Access | Where-Object {$_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false}
-    if($OldDomainAccessRules){
-        $ACLUpdates = 0
-        foreach ($OldAccessRule in $OldDomainAccessRules){
-            $ObjectName = $OldAccessRule.IdentityReference -replace ".+\\(.+)",'$1'
-            $NewDomainADObject = Get-ADObject -Filter {SamAccountName -eq $ObjectName} -Properties CanonicalName
-            if ($NewDomainADObject){ #User/group found in new forest
-                $ACLUpdates++
-                # Add new Acess rule for user in new forest
-                $NewAccessRule = New-Object system.security.AccessControl.FileSystemAccessRule("$NewDomainName\$ObjectName",`
-                                                                                        $OldAccessRule.FileSystemRights,`
-                                                                                        $OldAccessRule.InheritanceFlags,`
-                                                                                        $OldAccessRule.PropagationFlags,`
-                                                                                        $OldAccessRule.AccessControlType`
-                                                                                       )
-                $ACL.AddAccessRule($NewAccessRule)
-    
-                # Remove old access rule for user in old forest
-                $ACL.RemoveAccessRule($OldAccessRule) | Out-Null
-    
+                    # Remove old access rule for user in old forest
+                    $ACL.RemoveAccessRule($OldAccessRule) | Out-Null
 
-    
-                #Return result
-                [PSCustomObject]@{
-                    Type                = "ACL Entry"
-                    Path                = $Item.FullName
-                    OldForestObjectName = $ObjectName
-                    FoundInNewForest    = $true
-                    ObjectType          = $NewDomainADObject.ObjectClass
-                    CanonicalName       = $NewDomainADObject.CanonicalName               
-                    ACLUpdated          = ""
-    
+
+
+                    #Return result
+                    [PSCustomObject]@{
+                        Type                = "ACL Entry"
+                        Path                = $Item.FullName
+                        OldForestObjectName = $ObjectName
+                        FoundInNewForest    = $true
+                        ObjectType          = $NewDomainADObject.ObjectClass
+                        CanonicalName       = $NewDomainADObject.CanonicalName               
+                        ACLUpdated          = ""
+                        ErrorMessage        = ""
+
+                    }
+
                 }
-    
+                else {
+                    #User / group not found in new forest
+                    [PSCustomObject]@{
+                        Type                = "ACL Entry"
+                        Path                = $Item.FullName
+                        OldForestObjectName = $ObjectName
+                        FoundInNewForest    = $false
+                        ObjectType          = ""
+                        CanonicalName       = ""
+                        ACLUpdated          = ""
+                        ErrorMessage        = ""
+                    }            
+                }
+
             }
-            else{ #User / group not found in new forest
+
+            # Set the ACL
+            if ($ACLUpdates -gt 0) {
+                try {
+                    Set-Acl -Path $Item.FullName -AclObject $ACL -ErrorAction Stop
+                    $ACLUpdated = $true  
+                    $ErrorMessage = ""      
+                }
+                Catch {
+                    $ACLUpdated = $false 
+                    $ErrorMessage = $Error[0].Exception.Message
+                }
                 [PSCustomObject]@{
-                    Type                = "ACL Entry"
+                    Type                = "ACL Update"
                     Path                = $Item.FullName
-                    OldForestObjectName = $ObjectName
-                    FoundInNewForest    = $false
-                    ObjectType          = ""
+                    OldForestObjectName = ""
+                    FoundInNewForest    = ""
                     CanonicalName       = ""
-                    ACLUpdated          = ""
-                }            
+                    ObjectType          = ""
+                    ACLUpdated          = $ACLUpdated
+                    ErrorMessage        = "$ErrorMessage"
+
+                }
             }
 
         }
-
-        # Set the ACL
-        if($ACLUpdates -gt 0){
-            try{
-                Set-Acl -Path $Item.FullName -AclObject $ACL -ErrorAction Stop
-                $ACLUpdated = $true        
-            }
-            Catch{
-                $ACLUpdated = $Error[0].Exception.Message
-            }
-
-
-            [PSCustomObject]@{
-                Type                = "ACL Update"
-                Path                = $Item.FullName
-                OldForestObjectName = ""
-                FoundInNewForest    = ""
-                CanonicalName       = ""
-                ObjectType          = ""
-                ACLUpdated          = $ACLReplaced
-
-            }
-        }
-
+    }
+    catch {
+        $ErrorMessage = $Error[0].Exception.Message
+        Type                = "Error"
+        Path                = $Item.FullName
+        OldForestObjectName = ""
+        FoundInNewForest    = ""
+        CanonicalName       = ""
+        ObjectType          = ""
+        ACLUpdated          = ""
+        ErrorMessage        = "$ErrorMessage"        
     }
 }
 
-if ($Result){
-    if($CSVLogPath) {$Result | Export-Csv -Path $CSVLogPath -NoTypeInformation -Force -ErrorAction Continue}
+if ($Result) {
+    if ($CSVLogPath) { $Result | Export-Csv -Path $CSVLogPath -NoTypeInformation -Force -ErrorAction Continue }
     return $Result
 }
 else {
