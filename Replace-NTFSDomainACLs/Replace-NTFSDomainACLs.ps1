@@ -4,8 +4,8 @@ This script replaces existing ACLs from a specific domain with entries from a ne
 
 .DESCRIPTION
 Typical use scenario: You are migrating from an old forest to a new one. Your file shares already have permissions that point
-to users and groups in the old domain. Given that you arleady created new users in the new domain with the same SamAccountName,
-you can use this script to go through each file and replace existing Access Rules from the old domain with idenitical ones that
+to users and groups in the old domain. Given that you already created new users in the new domain with the same SamAccountName,
+you can use this script to go through each file and replace existing Access Rules from the old domain with identical ones that
 point to the new domain.
 
 The script requires cmdlets from the ActiveDirectory module.
@@ -15,8 +15,8 @@ For best performance, use local paths instead of network locations. However netw
 .\Replace-NTFSDomainACLs.ps1 -OldDomainName "OldDomain" -NewDomainName "NewDomain" -RootPath D:\FileShares\ExampleShare | Out-GridView
 
 This will check the security permissions on each file under the root path, for each file where permissions are not inherited and
-the Access Rule belong to objects in OldDomain, the script will try to find a match with the same username in NewDomain. If a 
-match is found, the script will add a new rule idenitical to the old one, and remove the OldDomain entry.
+the Access Rule belong to objects in OldDomain, the script will try to find a match with the same username in NewDomain. If a
+match is found, the script will add a new rule identical to the old one, and remove the OldDomain entry.
 
 The domain names must be the same as the pre Windows 2000 format, DomainName\Username not Username@domain.com
 
@@ -32,184 +32,246 @@ https://github.com/WillyMoselhy/ActiveDirectory-PowerShell-Scripts/tree/master/R
 #>
 
 #Requires -Modules ActiveDirectory
+function Replace-NTFSDomainACLs {
+    [CmdletBinding(SupportsShouldProcess)]
+    Param(
+        # Old domain name
+        [Parameter(Mandatory = $true)]
+        [string] $OldDomainName ,
 
-Param(
-    # Old domain name
-    [Parameter(Mandatory = $true)]
-    [string] $OldDomainName ,
+        # New domain name
+        [Parameter(Mandatory = $true)]
+        [string] $NewDomainName,
 
-    # New domain name
-    [Parameter(Mandatory = $true)]
-    [string] $NewDomainName,
+        # Path of folder to replace permissions
+        [Parameter(Mandatory = $true)]
+        [ValidateScript( { Test-Path -Path $_ })]
+        [string] $RootPath,
 
-    # Path of folder to replace permissions
-    [Parameter(Mandatory = $true)]
-    [ValidateScript( { Test-Path -Path $_ })]
-    [string] $RootPath,
+        # New domain controller FQDN. Specify this if the script is running from old domain.
+        [Parameter(Mandatory = $false)]
+        [ValidateScript( { Test-NetConnection -ComputerName $_ -InformationLevel Quiet })]
+        [string] $NewDCFQDN,
 
-    # New domain controller FQDN. Specify this if the script is running from old domain.
-    [Parameter(Mandatory = $false)]
-    [ValidateScript( {Test-NetConnection -ComputerName $_ -InformationLevel Quiet})]
-    [string] $NewDCFQDN,
+        # List of exception objects in old domain to skip.
+        # This will not replace accounts for defined values.
+        # specify as pre Windows 2000 format "OldDomain\Name"
+        [string[]] $ExceptionList,
 
-    # List of exception objects in old domain to skip. 
-    # This will not replace accounts for defined values.
-    # specify as pre Windows 2000 format "OldDomain\Name"
-    [string[]] $ExceptionList,
+        # List of object (users or groups) to replace
+        # This will only replace the accounts for defined values
+        # specify as per Windows 2000 format "OldDomain\Name"
+        [string[]] $IncludeList,
 
-    # List of object (users or groups) to replace
-    # This will only replace the accounts for defined values
-    # specify as per Windows 2000 format "OldDomain\Name"
-    [string[]] $IncludeList,
+        # Path to export results as CSV
+        [Parameter(Mandatory = $false)]
+        [string] $CSVLogPath,
 
-    # Path to export results as CSV
-    [Parameter(Mandatory = $false)]
-    [string] $CSVLogPath
-)
+        # Do not remove old permissions
+        [switch] $KeepOldPermissions
 
+    )
 
 
-$ErrorActionPreference = "Stop"
 
-$RootItem = [Array] (Get-Item -Path $RootPath)
-$ChildItems = [Array] (Get-ChildItem -Path $RootPath -Recurse )
-if ($ChildItems) { $AllItems = $RootItem + $ChildItems }
-else { $AllItems = $RootItem }
+    $ErrorActionPreference = "Stop"
+    function Get-AllTargetItems {
+        [CmdletBinding()]
+        param (
+            [string] $RootPath
+        )
+        $rootItem = [Array] (Get-Item -Path $RootPath -ErrorAction Stop)
+        $childItems = [Array] (Get-ChildItem -Path $RootPath -Recurse )
+        if ($childItems) { $allItems = $rootItem + $childItems }
+        else { $allItems = $rootItem }
 
-if($NewDCFQDN){
-    #If new DC FQDN is specified, use it when getting the AD Object
-    $PSDefaultParameterValues = @{
-        "Get-ADObject:Server" = $NewDCFQDN
+        #output
+        $allItems
     }
-}
 
-$Count = 0
-
-$Result = foreach ($Item in $AllItems) {
-    #Update Progress bar
-    $Count++
-    $Progress = ($Count / $AllItems.Count) * 100
-    Write-Progress -Activity "Replacing security permissions of objects from $OldDomainName with $NewDomainName" `
-        -Status   "$Count/$($AllItems.Count) - $($Item.FullName)" `
-        -PercentComplete $Progress    
-    try {
+    function Test-LongPath {
         # Handling for long paths
-        if($item.FullName.length -ge 255 -and $item.FullName -notlike "\\?\*"){
+        [CmdletBinding()]
+        param (
+            $AllItems
+        )
+        $longPathItems = $AllItems | Where-Object { $_.FullName.Length -ge 255 }
+        if ($longPathItems) {
+            Write-Warning "The following items have long paths."
+            $longPathItems | ForEach-Object { Write-Output $_.FullName }
             Write-Error -Exception @"
-The file name is too long. Please use \\?\ or \\?\UNC\ prefix (for Windows 1607+) or use Mapped Drives to shorten the path.
+The path is too long. Please use \\?\ or \\?\UNC\ prefix (for Windows 1607+) or use Mapped Drives to shorten the path.
 For more info check this link: https://docs.microsoft.com/en-us/windows/desktop/FileIO/naming-a-file#maximum-path-length-limitation
+path: $item.FullName
 "@
         }
-        $ACL = $Item | Get-Acl
-        $OldDomainAccessRules = $Acl.Access | Where-Object { $_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false}
-        
-        #Remove accounts that are in the excpetion list
-        if($ExceptionList){
-            $OldDomainAccessRules = $OldDomainAccessRules | Where-Object {$_.IdentityReference.Value -notin $ExceptionList}
+    }
+
+    # Get all target items
+    Write-Verbose -Message "Getting all target items under '$RootPath'"
+    $allItems = Get-AllTargetItems -RootPath $RootPath
+    Write-Verbose -Message "Found $($allItems.Count) items."
+
+    # Check for long paths
+    if ($RootPath -notlike "\\?\*") {
+        Write-Verbose -Message "Checking for long paths"
+        Test-LongPath -AllItems $allItems
+        Write-Verbose -Message "Did not find any long path items"
+    }
+
+    if ($NewDCFQDN) {
+        #If new DC FQDN is specified, use it when getting the AD Object
+        $PSDefaultParameterValues = @{
+            "Get-ADObject:Server" = $NewDCFQDN
         }
-        
-        # Filter by accounts that are in the include list
-        if($IncludeList){
-            $OldDomainAccessRules = $OldDomainAccessRules | Where-Object {$_.IdentityReference.Value -in $IncludeList}
+    }
+
+    $count = 0
+
+    $result = foreach ($item in $allItems) {
+        #Update Progress bar
+        $count++
+        $progress = ($count / $allItems.Count) * 100
+        if($count%10 -eq 0){ # Show progress every 10 items to improve performance
+            Write-Progress -Activity "Replacing security permissions of objects from $OldDomainName with $NewDomainName" `
+            -Status "$count/$($allItems.Count)" `
+            -PercentComplete $progress
         }
 
-        if ($OldDomainAccessRules) {
-            $ACLUpdates = 0
-            foreach ($OldAccessRule in $OldDomainAccessRules) {
-                $ObjectName = $OldAccessRule.IdentityReference -replace ".+\\(.+)", '$1'
-                $NewDomainADObject = Get-ADObject -Filter { SamAccountName -eq $ObjectName } -Properties CanonicalName 
-                if ($NewDomainADObject) {
-                    #User/group found in new forest
-                    $ACLUpdates++
-                    # Add new Acess rule for user in new forest
-                    $NewAccessRule = New-Object system.security.AccessControl.FileSystemAccessRule("$NewDomainName\$ObjectName", `
-                            $OldAccessRule.FileSystemRights, `
-                            $OldAccessRule.InheritanceFlags, `
-                            $OldAccessRule.PropagationFlags, `
-                            $OldAccessRule.AccessControlType`
-                    )
-                    $ACL.AddAccessRule($NewAccessRule)
+        Write-Verbose -Message "Checking ACL for: $($item.FullName)"
 
-                    # Remove old access rule for user in old forest
-                    $ACL.RemoveAccessRule($OldAccessRule) | Out-Null
+        try {
+
+            $acl = $item | Get-Acl
+            $oldDomainAccessRules = $acl.Access | Where-Object { $_.IdentityReference.Value -like "$OldDomainName*" -and $_.IsInherited -eq $false }
+
+            # Remove accounts that are in the exception list
+            if ($ExceptionList) {
+                $oldDomainAccessRules = $oldDomainAccessRules | Where-Object { $_.IdentityReference.Value -notin $ExceptionList }
+            }
+
+            # Filter by accounts that are in the include list
+            if ($IncludeList) {
+                $oldDomainAccessRules = $oldDomainAccessRules | Where-Object { $_.IdentityReference.Value -in $IncludeList }
+            }
+
+            if ($oldDomainAccessRules) {
+                $aclUpdates = 0
+                foreach ($oldAccessRule in $oldDomainAccessRules) {
+                    $objectName = $oldAccessRule.IdentityReference -replace ".+\\(.+)", '$1'
+                    $newDomainADObject = Get-ADObject -Filter { SamAccountName -eq $objectName } -Properties CanonicalName
+                    if ($newDomainADObject) {
+                        #User/group found in new forest
+                        $aclUpdates++
+                        # Add new Access rule for user in new forest
+                        $NewAccessRule = New-Object system.security.AccessControl.FileSystemAccessRule("$NewDomainName\$objectName", `
+                                $oldAccessRule.FileSystemRights, `
+                                $oldAccessRule.InheritanceFlags, `
+                                $oldAccessRule.PropagationFlags, `
+                                $oldAccessRule.AccessControlType`
+                        )
+                        $acl.AddAccessRule($NewAccessRule)
+
+                        if(-not $KeepOldPermissions){
+                            # Remove old access rule for user in old forest
+                            $acl.RemoveAccessRule($oldAccessRule) | Out-Null
+                        }
 
 
+                        #Return result
+                        [PSCustomObject]@{
+                            Type                = "ACL Entry"
+                            Path                = $item.FullName
+                            OldForestObjectName = $objectName
+                            FoundInNewForest    = $true
+                            ObjectType          = $newDomainADObject.ObjectClass
+                            CanonicalName       = $newDomainADObject.CanonicalName
+                            KeepOldPermissions  = $KeepOldPermissions
+                            ACLUpdated          = ""
+                            ErrorMessage        = ""
 
-                    #Return result
-                    [PSCustomObject]@{
-                        Type                = "ACL Entry"
-                        Path                = $Item.FullName
-                        OldForestObjectName = $ObjectName
-                        FoundInNewForest    = $true
-                        ObjectType          = $NewDomainADObject.ObjectClass
-                        CanonicalName       = $NewDomainADObject.CanonicalName               
-                        ACLUpdated          = ""
-                        ErrorMessage        = ""
-
+                        }
+                    }
+                    else {
+                        #User / group not found in new forest
+                        [PSCustomObject]@{
+                            Type                = "ACL Entry"
+                            Path                = $item.FullName
+                            OldForestObjectName = $objectName
+                            FoundInNewForest    = $false
+                            ObjectType          = ""
+                            CanonicalName       = ""
+                            KeepOldPermissions  = $true #If object is not found in new domain we will keep the old permission anyway.
+                            ACLUpdated          = ""
+                            ErrorMessage        = ""
+                        }
                     }
 
                 }
-                else {
-                    #User / group not found in new forest
+                # Set the ACL
+                if ($aclUpdates -gt 0) {
+                    Write-Verbose -Message "Applying $aclUpdates updates to the ACL"
+                    try {
+                        <#
+                        if($PSCmdlet.ShouldProcess()){
+                            Set-Acl -Path $item.FullName -AclObject $acl -ErrorAction Stop
+                        }
+                        else {
+                            Set-Acl -Path $item.FullName -AclObject $acl -ErrorAction Stop -WhatIf
+                        }
+                        #>
+                        Set-Acl -Path $item.FullName -AclObject $acl -ErrorAction Stop -WhatIf:$WhatIfPreference
+
+                        $aclUpdated = $true
+                        if($WhatIfPreference){
+                            $errorMessage = "WhatIf enabled. No changes applied"
+                        }
+                        else{
+                            $errorMessage = ""
+                        }
+
+                    }
+                    Catch {
+                        $aclUpdated = $false
+                        $errorMessage = $Error[0].Exception.Message
+                    }
                     [PSCustomObject]@{
-                        Type                = "ACL Entry"
-                        Path                = $Item.FullName
-                        OldForestObjectName = $ObjectName
-                        FoundInNewForest    = $false
-                        ObjectType          = ""
+                        Type                = "ACL Update"
+                        Path                = $item.FullName
+                        OldForestObjectName = ""
+                        FoundInNewForest    = ""
                         CanonicalName       = ""
-                        ACLUpdated          = ""
-                        ErrorMessage        = ""
-                    }            
-                }
+                        ObjectType          = ""
+                        ACLUpdated          = $aclUpdated
+                        ErrorMessage        = "$errorMessage"
 
-            }
-
-            # Set the ACL
-            if ($ACLUpdates -gt 0) {
-                try {
-                    Set-Acl -Path $Item.FullName -AclObject $ACL -ErrorAction Stop
-                    $ACLUpdated = $true  
-                    $ErrorMessage = ""      
-                }
-                Catch {
-                    $ACLUpdated = $false 
-                    $ErrorMessage = $Error[0].Exception.Message
-                }
-                [PSCustomObject]@{
-                    Type                = "ACL Update"
-                    Path                = $Item.FullName
-                    OldForestObjectName = ""
-                    FoundInNewForest    = ""
-                    CanonicalName       = ""
-                    ObjectType          = ""
-                    ACLUpdated          = $ACLUpdated
-                    ErrorMessage        = "$ErrorMessage"
-
+                    }
                 }
             }
-
+        }
+        catch {
+            $errorMessage = $Error[0].Exception.Message
+            [PSCustomObject]@{
+                Type                = "Error"
+                Path                = $item.FullName
+                OldForestObjectName = ""
+                FoundInNewForest    = ""
+                CanonicalName       = ""
+                ObjectType          = ""
+                ACLUpdated          = ""
+                ErrorMessage        = "$errorMessage"
+            }
         }
     }
-    catch {
-        $ErrorMessage = $Error[0].Exception.Message
-        [PSCustomObject]@{
-            Type                = "Error"
-            Path                = $Item.FullName
-            OldForestObjectName = ""
-            FoundInNewForest    = ""
-            CanonicalName       = ""
-            ObjectType          = ""
-            ACLUpdated          = ""
-            ErrorMessage        = "$ErrorMessage"   
-        }
-    }
-}
 
-if ($Result) {
-    if ($CSVLogPath) { $Result | Export-Csv -Path $CSVLogPath -NoTypeInformation -Force -ErrorAction Continue }
-    return $Result
-}
-else {
-    Write-Warning "No changes were applied."
+    if ($result) {
+        if ($CSVLogPath) { $result | Export-Csv -Path $CSVLogPath -NoTypeInformation -Force -ErrorAction Continue }
+
+        #output
+        $result
+    }
+    else {
+        Write-Warning "No changes were applied."
+    }
+
 }
