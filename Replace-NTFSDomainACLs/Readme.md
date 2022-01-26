@@ -15,7 +15,7 @@ point to the new domain.
 ```
 
 This will check the security permissions on each file under the root path, for each file where permissions are not inherited and
-the Access Rule belong to objects in OldDomain, the script will try to find a match with the same username in NewDomain. If a 
+the Access Rule belong to objects in OldDomain, the script will try to find a match with the same username in NewDomain. If a
 match is found, the script will add a new rule idenitical to the old one, and remove the OldDomain entry.
 
 The results will be displayed in a Grid View.
@@ -52,6 +52,27 @@ $IncludeList = "OldDomain\Username","OldDomain\Group Name"
 
 The script will only replace the accounts in the $IncludeList variable.
 
+**Example 6** Use splatting and `Export-CSV` for timestamped logs
+```PowerShell
+$RootPath = 'F:\Share'
+$LogFolderPath = 'C:\PermissionReplaceLogs'
+
+$params = @{
+    OldDomainName      = 'OldContoso'
+    NewDomainName      = 'NewContoso'
+    RootPath           = $RootPath
+    NewDCFQDN          = 'DC1.NewContoso.com'
+    KeepOldPermissions = $true #This only duplicates the permissions
+    WhatIf             = $false
+
+}
+$result = Replace-NTFSDomainACLs @params
+
+$timeStamp = Get-Date -Format "yyyyMMdd-HHmm"
+$csvPath = Join-Path -Path $LogFolderPath -ChildPath "$($RootPath -replace "\\","-" -replace ":","-") - $timeStamp.csv"
+
+$result | Export-Csv -Path $csvPath -Encoding Unicode -NoTypeInformation
+```
 ## Handling long file names
 
 The Get-ACL and Set-ACL commands do not function if the file name is longer than 255 characters.
